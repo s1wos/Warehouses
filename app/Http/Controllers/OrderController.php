@@ -38,6 +38,9 @@ class OrderController extends Controller
         // Создаём заказ
         $order = $this->orderService->createOrder($request->validated());
 
+        // Списываем товары со склада и записываем движения
+        $this->orderService->processOrderMovements($order, $request->input('items'));
+
         // Возвращаем созданный заказ с использованием OrderResource
         return response()->json(new OrderResource($order), 201);
     }

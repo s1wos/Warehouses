@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Movements;
 use App\Models\Order;
 use App\Models\Stock;
 use Illuminate\Support\Facades\DB;
@@ -111,20 +112,30 @@ class OrderService
      * @return void
      * @throws \Exception If there is insufficient stock.
      */
-    private function deductStock(int $productId, int $warehouseId, int $quantity): void
+    public function deductStock(int $productId, int $warehouseId, int $quantity): void
     {
-        // Ищем запись остатка по товару и складу
-        $stock = Stock::where('product_id', $productId)
+        // Получаем текущий остаток
+        $currentStock = Stock::where('product_id', $productId)
             ->where('warehouse_id', $warehouseId)
-            ->firstOrFail();
+            ->value('quantity');
 
-        // Проверяем, хватает ли остатка
-        if ($stock->stock < $quantity) {
-            throw new \Exception('Not enough stock available.');
+        if ($currentStock < $quantity) {
+            throw new \Exception('Недостаточно товара для списания. ID товара: ' . $productId);
         }
 
-        // Списываем остаток
-        $stock->decrement('stock', $quantity);
+        // Записываем движение
+        Movements::create([
+            'product_id' => $productId,
+            'warehouse_id' => $warehouseId,
+            'quantity' => -$quantity,
+            'type' => 'decrease',
+            'previous_stock' => $currentStock,
+        ]);
+
+        // Обновляем остаток
+        Stock::where('product_id', $productId)
+            ->where('warehouse_id', $warehouseId)
+            ->decrement('quantity', $quantity);
     }
 
     /**
@@ -155,6 +166,41 @@ class OrderService
         // Списываем остатки по каждой позиции заказа
         foreach ($order->items as $item) {
             $this->deductStock($item->product_id, $order->warehouse_id, $item->count);
+        }
+    }
+
+    /**
+     * Processing of movements and write-off of goods when creating an order.
+     */
+    public function processOrderMovements(Order $order, array $items): void
+    {
+        foreach ($items as $item) {
+            $productId = $item['product_id'];
+            $warehouseId = $order->warehouse_id;
+            $count = $item['count'];
+
+            // Получаем текущий остаток на складе
+            $currentStock = Stock::where('product_id', $productId)
+                ->where('warehouse_id', $warehouseId)
+                ->value('quantity');
+
+            if ($currentStock < $count) {
+                throw new \Exception("Недостаточно товара для списания. ID товара: $productId");
+            }
+
+            // Записываем движение
+            Movement::create([
+                'product_id' => $productId,
+                'warehouse_id' => $warehouseId,
+                'quantity' => -$count,
+                'type' => 'decrease',
+                'previous_stock' => $currentStock,
+            ]);
+
+            // Списываем остаток
+            Stock::where('product_id', $productId)
+                ->where('warehouse_id', $warehouseId)
+                ->decrement('quantity', $count);
         }
     }
 }
